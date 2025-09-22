@@ -60,7 +60,17 @@ module kosei_audio_chip (
     // 0x04: control: [1:0] input_sel (0=PCM test,1=I2S,2=SPDIF,3=USB), [7:4] osr_sel (0=1x,1=4x,2=8x,3=16x)
     // 0x08: volume (Q1.15) applied to both channels
     // 0x0C: soft-mute enable
-    // 0x10.. presets/coeff select (not fully implemented)
+    // 0x10: de-emphasis enable (bit0)
+    // 0x14: balance_q15 (signed)
+    // 0x18: crossfeed_q15 (unsigned)
+    // 0x1C: meters/status readback L (peak[23:0])
+    // 0x20: meters/status readback R (peak[23:0])
+    // 0x24: temperature code
+    // 0x28: EQ enable (bit0)
+    // 0x2C..2F: Coeff SRAM access: 0x2C addr, 0x30 wdata, 0x34 cmd (bit0=write, bit1=read), 0x38 rdata
+    // 0x3C: DAC mode: [0]=multi-bit enable
+    // 0x40: DAC trim L [11:0]
+    // 0x44: DAC trim R [11:0]
     
     wire        reg_wen  = csr_write;
     wire        reg_ren  = csr_read;
@@ -69,7 +79,6 @@ module kosei_audio_chip (
     wire [31:0] reg_rdata;
     wire        reg_ready;
 
-    assign csr_rdata = reg_rdata;
     assign csr_ready = reg_ready;
 
     // Default values
@@ -80,11 +89,23 @@ module kosei_audio_chip (
     reg [3:0]  osr_sel;   // 0=1x,1=4x,2=8x,3=16x
     reg [15:0] volume_q15; // Q1.15
     reg        soft_mute_en;
+    reg        deemp_enable;
+    reg signed [15:0] balance_q15;
+    reg [15:0] crossfeed_q15;
+    reg        eq_enable;
+    reg        dac_multibit;
+    reg [11:0] dac_trim_l;
+    reg [11:0] dac_trim_r;
+    reg [7:0]  coeff_addr;
+    reg [31:0] coeff_wdata;
+    reg        coeff_wen;
+    reg        coeff_ren;
+    wire [31:0] coeff_rdata;
 
     // CSR implementation
     registers #(
         .ADDR_WIDTH(8),
-        .READONLY_MASK(32'h0000_0001) // 0x00 readonly (bit0=addr0 RO indicator in this simple scheme)
+    .READONLY_MASK(32'h0000_0001) // 0x00 readonly (bit0=addr0 RO indicator in this simple scheme)
     ) u_regs (
         .clk(clk),
         .rst_n(rst_n),
@@ -106,6 +127,9 @@ module kosei_audio_chip (
             osr_sel      <= 4'd1; // default 4x
             volume_q15   <= 16'h7FFF; // unity
             soft_mute_en <= 1'b0;
+            deemp_enable <= 1'b0;
+            balance_q15  <= 16'sd0;
+            crossfeed_q15<= 16'd0;
         end else if (reg_wen) begin
             case (reg_addr)
                 8'h04: begin
@@ -114,6 +138,16 @@ module kosei_audio_chip (
                 end
                 8'h08: volume_q15 <= reg_wdata[15:0];
                 8'h0C: soft_mute_en <= reg_wdata[0];
+                8'h10: deemp_enable <= reg_wdata[0];
+                8'h14: balance_q15 <= reg_wdata[15:0];
+                8'h18: crossfeed_q15 <= reg_wdata[15:0];
+                8'h28: eq_enable <= reg_wdata[0];
+                8'h2C: coeff_addr <= reg_wdata[7:0];
+                8'h30: coeff_wdata <= reg_wdata;
+                8'h34: begin coeff_wen <= reg_wdata[0]; coeff_ren <= reg_wdata[1]; end
+                8'h3C: dac_multibit <= reg_wdata[0];
+                8'h40: dac_trim_l   <= reg_wdata[11:0];
+                8'h44: dac_trim_r   <= reg_wdata[11:0];
                 default: ;
             endcase
         end
@@ -165,9 +199,36 @@ module kosei_audio_chip (
         .osr_sel(osr_sel),
         .volume_q15(volume_q15),
         .soft_mute(soft_mute_en),
+        .deemp_enable(deemp_enable),
+        .balance_q15(balance_q15),
+        .crossfeed_q15(crossfeed_q15),
         .out_valid(dsp_valid),
         .out_l(dsp_l),
         .out_r(dsp_r)
+    );
+
+    // EQ engine insertion between DSP and DAC
+    wire        eq_valid; wire [23:0] eq_l, eq_r;
+    // Pack identity EQ coefficients into a flat bus (b0=1.0, others=0)
+    localparam NSEC = 4;
+    wire [NSEC*5*16-1:0] coeff_bus_flat;
+    genvar si;
+    generate
+        for (si=0; si<NSEC; si=si+1) begin: COEFF_PACK
+            localparam integer O0 = (si*5+0)*16;
+            localparam integer O1 = (si*5+1)*16;
+            localparam integer O2 = (si*5+2)*16;
+            localparam integer O3 = (si*5+3)*16;
+            localparam integer O4 = (si*5+4)*16;
+            assign coeff_bus_flat[O0+15:O0] = 16'h7FFF; // b0
+            assign coeff_bus_flat[O1+15:O1] = 16'h0000; // b1
+            assign coeff_bus_flat[O2+15:O2] = 16'h0000; // b2
+            assign coeff_bus_flat[O3+15:O3] = 16'h0000; // a1
+            assign coeff_bus_flat[O4+15:O4] = 16'h0000; // a2
+        end
+    endgenerate
+    eq_engine #(.N_SECTIONS(NSEC)) u_eq(
+        .clk(clk), .rst_n(rst_n), .in_valid(dsp_valid), .in_l(dsp_l), .in_r(dsp_r), .enable(eq_enable), .coeff_bus(coeff_bus_flat), .out_valid(eq_valid), .out_l(eq_l), .out_r(eq_r)
     );
 
     // ------------------------------------------------------------------
@@ -176,11 +237,46 @@ module kosei_audio_chip (
     dac_core u_dac (
         .clk(clk),
         .rst_n(rst_n),
-        .in_valid(dsp_valid),
-        .in_l(dsp_l),
-        .in_r(dsp_r),
+        .in_valid(eq_valid),
+        .in_l(eq_l),
+        .in_r(eq_r),
+        .mode_multibit(dac_multibit),
+        .trim_l(dac_trim_l),
+        .trim_r(dac_trim_r),
         .sdm_out_l(sdm_out_l),
         .sdm_out_r(sdm_out_r)
     );
+
+    // Diagnostic meters and temperature stub
+    wire [23:0] peak_l, peak_r, rms_l, rms_r;
+    audio_meters u_mtr(
+        .clk(clk), .rst_n(rst_n), .in_valid(dsp_valid), .in_l(dsp_l), .in_r(dsp_r), .peak_l(peak_l), .peak_r(peak_r), .rms_l(rms_l), .rms_r(rms_r)
+    );
+    wire [11:0] temp_code;
+    temp_sensor_stub u_temp(.clk(clk), .rst_n(rst_n), .temp_code(temp_code));
+
+    // Coefficient SRAM
+    coeff_sram u_coeff(
+        .clk(clk), .rst_n(rst_n), .wen(coeff_wen), .addr(coeff_addr), .wdata(coeff_wdata), .ren(coeff_ren), .rdata(coeff_rdata)
+    );
+
+    // Note: EQ engine and coefficient mapping reserved for future; coeff_sram is accessible via CSRs for host to manage
+
+    // Extend readback via simple mux on read_en (piggyback onto registers block by shadowing rdata when read)
+    // Note: keeping 'registers' module simple; we overlay read data here.
+    reg [31:0] reg_rdata_ovr;
+    assign csr_rdata = (reg_ren) ? reg_rdata_ovr : reg_rdata;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) reg_rdata_ovr <= 32'd0;
+        else if (reg_ren) begin
+            case (reg_addr)
+                8'h1C: reg_rdata_ovr <= {8'd0, peak_l};
+                8'h20: reg_rdata_ovr <= {8'd0, peak_r};
+                8'h24: reg_rdata_ovr <= {20'd0, temp_code};
+                8'h38: reg_rdata_ovr <= coeff_rdata;
+                default: reg_rdata_ovr <= reg_rdata;
+            endcase
+        end
+    end
 
 endmodule

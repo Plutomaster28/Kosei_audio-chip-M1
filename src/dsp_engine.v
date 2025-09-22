@@ -15,6 +15,9 @@ module dsp_engine (
     input  wire [3:0]  osr_sel,      // 0=1x,1=4x,2=8x,3=16x
     input  wire [15:0] volume_q15,   // Q1.15
     input  wire        soft_mute,
+    input  wire        deemp_enable,
+    input  wire signed [15:0] balance_q15,
+    input  wire [15:0] crossfeed_q15,
     output reg         out_valid,
     output reg  [23:0] out_l,
     output reg  [23:0] out_r
@@ -71,15 +74,56 @@ module dsp_engine (
     wire signed [23:0] vol_l_d = vol_l + {{8{tpdf[16]}}, tpdf[16:1]};
     wire signed [23:0] vol_r_d = vol_r + {{8{tpdf[16]}}, tpdf[16:1]};
 
-    // 4x interpolator instance for osr_sel==1
-    wire         fir4_out_valid_l, fir4_out_valid_r;
-    wire [23:0]  fir4_out_l, fir4_out_r;
+    // De-emphasis stage (optional)
+    wire deemp_valid;
+    wire [23:0] deemp_l, deemp_r;
+    deemphasis_44k1 u_deemp(
+        .clk(clk), .rst_n(rst_n), .in_valid(in_valid), .in_l(vol_l_d), .in_r(vol_r_d), .enable(deemp_enable), .out_valid(deemp_valid), .out_l(deemp_l), .out_r(deemp_r)
+    );
+
+    // Balance + Crossfeed stage
+    wire bc_valid; wire [23:0] bc_l, bc_r;
+    balance_crossfeed u_bc(
+        .clk(clk), .rst_n(rst_n), .in_valid(deemp_valid), .in_l(deemp_l), .in_r(deemp_r), .balance_q15(balance_q15), .crossfeed_q15(crossfeed_q15), .out_valid(bc_valid), .out_l(bc_l), .out_r(bc_r)
+    );
+
+    // Interpolators: 2x and 4x structures
+    reg          fir4_in_valid;
+    reg  [23:0]  fir4_in_l;
+    reg  [23:0]  fir4_in_r;
+    always @* begin
+        case (osr_sel)
+            4'd2: begin // 8x: feed 2x output into 4x
+                fir4_in_valid = v2a_l & v2a_r;
+                fir4_in_l = s2a_l;
+                fir4_in_r = s2a_r;
+            end
+            4'd3: begin // 16x: feed second 2x output into 4x
+                fir4_in_valid = v2b_l & v2b_r;
+                fir4_in_l = s2b_l;
+                fir4_in_r = s2b_r;
+            end
+            default: begin // 1x/4x
+                fir4_in_valid = bc_valid;
+                fir4_in_l = bc_l;
+                fir4_in_r = bc_r;
+            end
+        endcase
+    end
+    wire         fir4_out_valid_l, fir4_out_valid_r; wire [23:0]  fir4_out_l, fir4_out_r;
     fir_interp_4x u_fir4_l(
-        .clk(clk), .rst_n(rst_n), .in_valid(in_valid), .in_sample(vol_l_d), .out_valid(fir4_out_valid_l), .out_sample(fir4_out_l)
+        .clk(clk), .rst_n(rst_n), .in_valid(fir4_in_valid), .in_sample(fir4_in_l), .out_valid(fir4_out_valid_l), .out_sample(fir4_out_l)
     );
     fir_interp_4x u_fir4_r(
-        .clk(clk), .rst_n(rst_n), .in_valid(in_valid), .in_sample(vol_r_d), .out_valid(fir4_out_valid_r), .out_sample(fir4_out_r)
+        .clk(clk), .rst_n(rst_n), .in_valid(fir4_in_valid), .in_sample(fir4_in_r), .out_valid(fir4_out_valid_r), .out_sample(fir4_out_r)
     );
+
+    // 2x interpolators for cascading to reach 8x/16x
+    wire v2a_l, v2a_r, v2b_l, v2b_r; wire [23:0] s2a_l, s2a_r, s2b_l, s2b_r;
+    fir_interp_2x u_2x_a_l(.clk(clk), .rst_n(rst_n), .in_valid(bc_valid), .in_sample(bc_l), .out_valid(v2a_l), .out_sample(s2a_l));
+    fir_interp_2x u_2x_a_r(.clk(clk), .rst_n(rst_n), .in_valid(bc_valid), .in_sample(bc_r), .out_valid(v2a_r), .out_sample(s2a_r));
+    fir_interp_2x u_2x_b_l(.clk(clk), .rst_n(rst_n), .in_valid(v2a_l),   .in_sample(s2a_l), .out_valid(v2b_l), .out_sample(s2b_l));
+    fir_interp_2x u_2x_b_r(.clk(clk), .rst_n(rst_n), .in_valid(v2a_r),   .in_sample(s2a_r), .out_valid(v2b_r), .out_sample(s2b_r));
 
     // Oversampling: use FIR for 4x; hold for others as placeholder
     always @(posedge clk or negedge rst_n) begin
@@ -96,15 +140,28 @@ module dsp_engine (
                 out_valid <= fir4_out_valid_l & fir4_out_valid_r;
                 out_l <= fir4_out_l;
                 out_r <= fir4_out_r;
+            end else if (osr_sel==4'd2) begin
+                // 8x via 2x then 4x: feed 2x output into 4x
+                // Reuse instantiated 4x by switching its inputs via combinational nets above
+                // For clarity, override fir4 inputs
+                // Note: since fir4 modules are already fed by fir4_in_*, we rely on continuous assignments below
+                out_valid <= fir4_out_valid_l & fir4_out_valid_r;
+                out_l <= fir4_out_l;
+                out_r <= fir4_out_r;
+            end else if (osr_sel==4'd3) begin
+                // 16x via 2x -> 2x -> 4x
+                out_valid <= fir4_out_valid_l & fir4_out_valid_r;
+                out_l <= fir4_out_l;
+                out_r <= fir4_out_r;
             end else begin
                 // Hold-based oversampling for other ratios
-                if (in_valid) begin
-                    hold_l <= vol_l_d;
-                    hold_r <= vol_r_d;
+                if (bc_valid) begin
+                    hold_l <= bc_l;
+                    hold_r <= bc_r;
                     osr_cnt <= osr_max;
                     out_valid <= 1'b1;
-                    out_l <= vol_l_d;
-                    out_r <= vol_r_d;
+                    out_l <= bc_l;
+                    out_r <= bc_r;
                 end else if (osr_cnt != 5'd0) begin
                     osr_cnt <= osr_cnt - 5'd1;
                     out_valid <= 1'b1;

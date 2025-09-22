@@ -14,6 +14,16 @@ set ::env(VERILOG_FILES) "\
 	$::env(DESIGN_DIR)/src/digital_frontend.v \
 	$::env(DESIGN_DIR)/src/dsp_engine.v \
 	$::env(DESIGN_DIR)/src/dac_core.v \
+	$::env(DESIGN_DIR)/src/biquad.v \
+	$::env(DESIGN_DIR)/src/eq_engine.v \
+	$::env(DESIGN_DIR)/src/coeff_sram.v \
+	$::env(DESIGN_DIR)/src/deemphasis_44k1.v \
+	$::env(DESIGN_DIR)/src/balance_crossfeed.v \
+	$::env(DESIGN_DIR)/src/fir_interp_2x.v \
+	$::env(DESIGN_DIR)/src/audio_meters.v \
+	$::env(DESIGN_DIR)/src/temp_sensor_stub.v \
+	$::env(DESIGN_DIR)/src/cd_efm_circ_stub.v \
+	$::env(DESIGN_DIR)/src/clock_mgr_stub.v \
 	$::env(DESIGN_DIR)/src/registers.v \
 	$::env(DESIGN_DIR)/src/fifo_sync.v \
 	$::env(DESIGN_DIR)/src/fifo_async.v \
