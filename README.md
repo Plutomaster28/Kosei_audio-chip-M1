@@ -1,54 +1,33 @@
 # Kosei Audio Chip M1 - Ultimate Audiophile 130nm Audio Chip
 
-## Overview
-
-The **Kosei Audio Chip M1** is an ultimate audiophile-grade audio processing chip designed for the highest fidelity audio reproduction. Built on the Sky130 130nm process technology, this chip integrates advanced digital signal processing, hybrid DAC technology, and audiophile-focused features for uncompromising sound quality.
+This repository currently contains a synthesizable RTL skeleton suitable for OpenLane/Yosys with stubs for many luxury features. It builds end-to-end and provides a clean top-level to extend.
 
 ## Features
 
 ###  **Digital Front-End**
-- **CD Support**: EFM/EFM+ decoding with CIRC error correction
-- **Multi-Format Input**: I²S, S/PDIF, and USB audio support
-- **De-emphasis**: Automatic de-emphasis filtering for CD audio
-- **Smart Interpolation**: Advanced algorithms for uncorrectable errors
+- Inputs: I²S (stub), S/PDIF (stub), USB audio (stub), and parallel PCM test input
+- De-emphasis/smart interpolation: planned (not yet implemented)
 
 ###  **Digital Signal Processing**
-- **Oversampling**: Selectable 4×, 8×, or 16× oversampling for smooth reconstruction
-- **FIR Filtering**: High-order linear-phase anti-aliasing filters
-- **Dither & Noise Shaping**: Minimizes quantization noise across the audio spectrum
-- **Digital EQ**: 10-band parametric equalizer with programmable coefficients
-- **Effects Processing**: Optional DSP effects and filtering
+- Oversampling control: 1×/4×/8×/16× (nearest-hold stub)
+- Volume (Q1.15), soft-mute ramp, simple dither (TPDF via LFSRs)
+- FIR/EQ/effects: planned
 
 ###  **DAC Core**
-- **Hybrid Architecture**: R-2R ladder + Multi-bit Sigma-Delta for optimal performance
-- **Dual Differential**: Fully differential outputs for maximum common-mode rejection
-- **Dynamic Calibration**: Real-time calibration for linearity and matching
-- **Temperature Compensation**: Maintains performance across temperature variations
+- Current: first-order sigma-delta bitstreams for L/R (digital stub)
+- Future: hybrid R-2R + multi-bit sigma-delta, calibration, temperature comp
 
 ###  **Analog Output Stage**
-- **Class-A Buffers**: Ultra-low distortion differential output buffers
-- **Multiple Outputs**: Line, balanced, and headphone outputs
-- **Low-Noise Design**: Optimized for minimal noise and distortion
-- **Variable Gain**: Programmable output levels
+- Not part of digital RTL; will be addressed during mixed-signal integration
 
 ###  **Clock & Jitter Management**
-- **High-Precision PLL**: Low-jitter clock generation and distribution
-- **FIFO Buffering**: Asynchronous sample rate conversion capability
-- **External Reference**: Support for external master clocks
-- **Jitter Attenuation**: Advanced jitter reduction circuits
+- Stubs only in RTL; core uses `clk` with single domain for synthesis
 
 ###  **Power & Isolation**
-- **Separate Rails**: Independent analog and digital power supplies
-- **Star Grounding**: Optimized ground topology for noise isolation
-- **LDO Regulators**: Clean, low-noise power distribution
-- **Thermal Management**: Temperature monitoring and protection
+- To be implemented at floorplanning/padframe and analog integration time
 
 ###  **Luxury Features**
-- **Programmable Filters**: User-configurable digital filters
-- **Audio Diagnostics**: Built-in THD+N and noise floor measurement
-- **Multiple Modes**: Various listening modes and sound signatures
-- **Status Monitoring**: Comprehensive system status and diagnostics
-- **On-Chip SRAM**: 64KB memory for coefficients and audio buffering
+- Many planned; CSR scaffolding and DSP hooks are in place
 
 ## Architecture
 
@@ -90,22 +69,26 @@ The **Kosei Audio Chip M1** is an ultimate audiophile-grade audio processing chi
 ```
 Kosei_audio-chip-M1/
 ├── config.tcl                 # OpenLane configuration
+├── constraints/top.sdc        # Timing constraints
 ├── Makefile                   # Build automation
 ├── README.md                  # This file
 ├── src/                       # Verilog source files
 │   ├── kosei_audio_chip.v     # Top-level module
-│   ├── digital_frontend.v     # Digital input processing
-│   ├── dsp_engine.v           # Signal processing
-│   ├── dac_core.v             # DAC implementation
-│   ├── analog_output.v        # Analog outputs
-│   ├── clock_management.v     # Clock generation
-│   ├── power_management.v     # Power management
-│   ├── luxury_features.v      # Advanced features
-│   └── sram_controller.v      # Memory controller
+│   ├── digital_frontend.v     # Input selection with I2S+CDC, S/PDIF/USB stubs
+│   ├── dsp_engine.v           # Volume/soft-mute/oversample/dither
+│   ├── dac_core.v             # 2nd-order 1-bit sigma-delta bitstreams
+│   ├── registers.v            # Simple CSR shim
+│   └── fifo_sync.v            # Utility FIFO (future use)
+│   ├── fifo_async.v           # Dual-clock FIFO for CDC
+│   ├── i2s_rx.v               # I2S receiver (bclk domain)
+│   ├── fir_interp_4x.v        # 4x polyphase FIR interpolator (skeleton)
+│   ├── spdif_rx.v             # S/PDIF RX (stub)
+│   └── usb_uac1_rx.v          # USB Audio Class 1 RX (stub)
 └── testbench/                 # Verification testbenches
-    ├── tb_kosei_audio_chip.v  # Top-level testbench
-    ├── tb_dsp_engine.v        # DSP engine tests
-    └── tb_dac_core.v          # DAC core tests
+   ├── tb_kosei_audio_chip.v  # Top-level testbench
+   ├── tb_dsp_engine.v        # DSP engine tests
+   ├── tb_dac_core.v          # DAC core tests
+   └── tb_digital_frontend.v  # Frontend tests
 ```
 
 ## Getting Started
@@ -120,35 +103,22 @@ Kosei_audio-chip-M1/
 
 ### Quick Start
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd Kosei_audio-chip-M1
-   ```
-
-2. **Check tools**:
-   ```bash
+1. Check tools:
+   ```pwsh
    make check_tools
    ```
 
-3. **Run simulations**:
-   ```bash
+2. Run simulations:
+   ```pwsh
    make sim_all          # Run all testbenches
    make sim_top          # Top-level simulation
    make sim_dsp          # DSP engine simulation
    make sim_dac          # DAC core simulation
    ```
 
-4. **View waveforms**:
-   ```bash
-   make view_top         # View top-level waveforms
-   make view_dsp         # View DSP waveforms
-   ```
-
-5. **Synthesize the design**:
-   ```bash
-   make synthesis        # OpenLane synthesis
-   make harden           # Complete ASIC flow
+3. Synthesize with OpenLane (Docker required):
+   ```pwsh
+   make synthesis
    ```
 
 ### Build Targets
@@ -171,7 +141,7 @@ This project is fully configured for the OpenLane digital design flow:
 
 ### Running OpenLane
 
-```bash
+```pwsh
 # Synthesis only
 make synthesis
 
@@ -179,7 +149,7 @@ make synthesis
 make harden
 
 # Check results
-ls runs/kosei_audio_chip/results/final/
+Get-ChildItem runs/kosei_audio_chip/results/final/
 ```
 
 ## Design Considerations
