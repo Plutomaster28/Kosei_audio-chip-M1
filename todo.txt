@@ -1,0 +1,26 @@
+Gotta work on these:
+
+PARTIALLY IMPLEMENTED (Scaffolding Ready)
+Digital Front-End
+
+CD Support: EFM/CIRC stub exists, needs real decoder implementation
+SPDIF/USB: Stub receivers exist, need actual protocol decoders
+Clock & Jitter Management
+
+High-Precision PLL: Clock manager stub exists, needs real PLL design
+Jitter Attenuation: Measurement/correction framework stubbed
+DAC Core
+
+Hybrid R-2R: Multi-bit mode hook exists, needs actual R-2R implementation
+Advanced Calibration: Basic trim implemented, needs full linearity cal
+
+NOT IMPLEMENTED (Out of RTL Scope)
+Analog Output Stage
+
+Class-A differential buffers, op-amps, reconstruction filters
+Multiple output modes (line/balanced/headphone)
+Analog volume/preamp stage
+Power & Noise Isolation
+
+Separate analog/digital rails, LDOs
+Star grounding, guard rings, substrate isolation
